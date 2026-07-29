@@ -13,9 +13,21 @@ def parse_args() -> Namespace:
     parser = ArgumentParser(
         description="Create an interactive fantasy ranking analysis"
     )
-    parser.add_argument("--predictions", required=True, help="Prediction CSV path")
-    parser.add_argument("--actual", required=True, help="Actual-rank CSV path")
-    parser.add_argument("--adp", required=True, help="ADP CSV path")
+    parser.add_argument(
+        "--predictions",
+        default="FantasyPositionRankingPredictions2025.csv",
+        help="Prediction CSV path (default: FantasyPositionRankingPredictions2025.csv)",
+    )
+    parser.add_argument(
+        "--actual",
+        default="cleaned_actual_ranks.csv",
+        help="Actual-rank CSV path (default: cleaned_actual_ranks.csv)",
+    )
+    parser.add_argument(
+        "--adp",
+        default="ppr_adp.csv",
+        help="ADP CSV path (default: ppr_adp.csv)",
+    )
     parser.add_argument(
         "--ecr", default="ecr_predictions.csv", help="ECR prediction CSV path"
     )
@@ -23,8 +35,8 @@ def parse_args() -> Namespace:
     parser.add_argument(
         "--min-games",
         type=int,
-        default=0,
-        help="Exclude players with fewer than this many games played (default: 0)",
+        default=4,
+        help="Exclude players with fewer than this many games played (default: 4)",
     )
     parser.add_argument(
         "--metric",
@@ -1124,6 +1136,42 @@ def make_html(
         f"<div class='comparison-metric' data-metric='avg'>{render_comparison_tables('avg')}</div>"
     )
 
+    def render_accuracy_scoreboard(metric: str, cutoff: str) -> str:
+        actual_rank_column = f"actual_rank_{metric}"
+        your_error_column = f"absolute_error_{metric}"
+        adp_error_column = f"adp_absolute_error_{metric}"
+        ecr_error_column = f"ecr_absolute_error_{metric}"
+        rows = []
+        for position in POSITIONS:
+            position_data = data[data["position"].eq(position)].copy()
+            if cutoff != "all":
+                position_data = position_data[
+                    position_data[actual_rank_column].le(int(cutoff))
+                ]
+            rows.append(
+                "<tr>"
+                f"<th scope='row'>{position}</th>"
+                f"<td>{position_data[your_error_column].median():.1f}</td>"
+                f"<td>{position_data[adp_error_column].median():.1f}</td>"
+                f"<td>{position_data[ecr_error_column].median():.1f}</td>"
+                f"<td>{len(position_data.dropna(subset=[your_error_column]))}</td>"
+                "</tr>"
+            )
+        return (
+            f"<div class='scoreboard-panel' data-scoreboard-metric='{metric}' "
+            f"data-scoreboard-cutoff='{cutoff}'>"
+            "<table class='scoreboard-table'><thead><tr>"
+            "<th>Position</th><th>You</th><th>ADP</th><th>ECR</th><th>Players</th>"
+            "</tr></thead><tbody>"
+            f"{''.join(rows)}</tbody></table></div>"
+        )
+
+    scoreboard_html = "".join(
+        render_accuracy_scoreboard(metric, cutoff)
+        for metric in ("total", "avg")
+        for cutoff in ("all", "12", "24", "36", "48")
+    )
+
     def render_rank_pair(
         index: int,
         position: str,
@@ -1213,6 +1261,24 @@ def make_html(
     updateComparisonTables();
     </script>
     """
+    scoreboard_sync_script = """
+    <script>
+    const scoreboardMetricSelect = document.querySelector('.scoreboard-metric-select');
+    const scoreboardCutoffSelect = document.querySelector('.scoreboard-cutoff-select');
+    const scoreboardPanels = document.querySelectorAll('.scoreboard-panel');
+    function updateScoreboard() {
+        const metric = scoreboardMetricSelect.value;
+        const cutoff = scoreboardCutoffSelect.value;
+        scoreboardPanels.forEach(function (panel) {
+            panel.hidden = panel.dataset.scoreboardMetric !== metric ||
+                panel.dataset.scoreboardCutoff !== cutoff;
+        });
+    }
+    scoreboardMetricSelect.addEventListener('change', updateScoreboard);
+    scoreboardCutoffSelect.addEventListener('change', updateScoreboard);
+    updateScoreboard();
+    </script>
+    """
     adp_charts_html = "".join(
         f"<section>{figure.to_html(full_html=False, include_plotlyjs=False, config={'responsive': True})}</section>"
         for figure in value_figures
@@ -1223,10 +1289,11 @@ def make_html(
     )
     html = f"""
     <html><head><meta charset='utf-8'><title>Fantasy Ranking Analysis</title>
-    <style>body{{font-family:Arial,sans-serif;max-width:1500px;margin:30px auto;padding:0 20px;color:#1f2937;overflow-x:hidden}}h1{{margin-bottom:4px}}.subtitle{{color:#6b7280}}.metrics{{display:flex;gap:16px;flex-wrap:wrap;margin:24px 0}}.metric{{background:#f3f4f6;padding:16px 22px;border-radius:8px;min-width:150px}}.metric strong{{display:block;font-size:26px}}.source-charts,.market-charts{{display:block}}.market-charts{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;justify-content:center}}.rank-pair{{display:block;margin-bottom:32px}}.rank-controls{{display:flex;gap:16px;align-items:center;margin:0 0 10px}}.rank-controls label{{display:flex;gap:6px;align-items:center;font-size:14px}}.rank-controls select{{font:inherit;padding:4px 8px}}.rank-row{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px}}.source-charts section,.market-charts section{{margin:0;min-width:0;overflow:hidden}}.plotly-graph-div{{width:100%!important;max-width:100%!important}}.comparison-controls{{display:flex;align-items:center;gap:8px;margin:12px 0 16px}}.comparison-controls select{{font:inherit;padding:5px 8px}}.comparison-grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}}.comparison-metric[hidden]{{display:none}}.comparison-list{{border:1px solid #dbe4ec;border-radius:6px;padding:12px;min-width:0}}.comparison-list h4{{margin:0 0 8px;font-size:15px}}.comparison-list table{{width:100%;border-collapse:collapse;font-size:13px}}.comparison-list th,.comparison-list td{{padding:5px 6px;border-bottom:1px solid #dbe4ec;text-align:left}}.comparison-list th{{background:#f3f4f6;font-weight:600}}.comparison-win{{background:#f0f9ff;border-color:#bae6fd}}.comparison-loss{{background:#fff7f7;border-color:#fecaca}}.comparison-win th{{background:#e0f2fe}}.comparison-loss th{{background:#fee2e2}}.comparison-win td:last-child{{color:#0369a1;font-weight:700}}.comparison-loss td:last-child{{color:#b91c1c;font-weight:700}}.audit{{background:#fff7ed;border-left:4px solid #f97316;padding:12px 18px;line-height:1.7}}section{{margin:34px 0}}@media (max-width:1100px){{.rank-row,.market-charts,.comparison-grid{{grid-template-columns:1fr}}}}</style></head><body>
+    <style>body{{font-family:Arial,sans-serif;max-width:1500px;margin:30px auto;padding:0 20px;color:#1f2937;overflow-x:hidden}}h1{{margin-bottom:4px}}.subtitle{{color:#6b7280}}.metrics{{display:flex;gap:16px;flex-wrap:wrap;margin:24px 0}}.metric{{background:#f3f4f6;padding:16px 22px;border-radius:8px;min-width:150px}}.metric strong{{display:block;font-size:26px}}.source-charts,.market-charts{{display:block}}.market-charts{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;justify-content:center}}.rank-pair{{display:block;margin-bottom:32px}}.rank-controls{{display:flex;gap:16px;align-items:center;margin:0 0 10px}}.rank-controls label{{display:flex;gap:6px;align-items:center;font-size:14px}}.rank-controls select{{font:inherit;padding:4px 8px}}.rank-row{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px}}.source-charts section,.market-charts section{{margin:0;min-width:0;overflow:hidden}}.plotly-graph-div{{width:100%!important;max-width:100%!important}}.scoreboard-controls{{display:flex;align-items:center;gap:16px;margin:12px 0 16px}}.scoreboard-controls label{{display:flex;align-items:center;gap:7px}}.scoreboard-controls select{{font:inherit;padding:5px 8px}}.scoreboard-panel[hidden]{{display:none}}.scoreboard-table{{width:100%;border-collapse:collapse;max-width:760px;background:#f8fafc;border:1px solid #dbe4ec;font-size:14px}}.scoreboard-table th,.scoreboard-table td{{padding:9px 12px;border-bottom:1px solid #dbe4ec;text-align:right}}.scoreboard-table th:first-child,.scoreboard-table td:first-child{{text-align:left}}.scoreboard-table thead th{{background:#e0f2fe;color:#075985;font-weight:700}}.scoreboard-table tbody th{{background:#f1f5f9;color:#334155}}.scoreboard-table tbody td:nth-child(2){{background:#eff6ff;color:#1d4ed8;font-weight:600}}.scoreboard-table tbody td:nth-child(3),.scoreboard-table tbody td:nth-child(4){{background:#fff7ed}}.comparison-controls{{display:flex;align-items:center;gap:8px;margin:12px 0 16px}}.comparison-controls select{{font:inherit;padding:5px 8px}}.comparison-grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}}.comparison-metric[hidden]{{display:none}}.comparison-list{{border:1px solid #dbe4ec;border-radius:6px;padding:12px;min-width:0}}.comparison-list h4{{margin:0 0 8px;font-size:15px}}.comparison-list table{{width:100%;border-collapse:collapse;font-size:13px}}.comparison-list th,.comparison-list td{{padding:5px 6px;border-bottom:1px solid #dbe4ec;text-align:left}}.comparison-list th{{background:#f3f4f6;font-weight:600}}.comparison-win{{background:#f0f9ff;border-color:#bae6fd}}.comparison-loss{{background:#fff7f7;border-color:#fecaca}}.comparison-win th{{background:#e0f2fe}}.comparison-loss th{{background:#fee2e2}}.comparison-win td:last-child{{color:#0369a1;font-weight:700}}.comparison-loss td:last-child{{color:#b91c1c;font-weight:700}}.audit{{background:#fff7ed;border-left:4px solid #f97316;padding:12px 18px;line-height:1.7}}section{{margin:34px 0}}@media (max-width:1100px){{.rank-row,.market-charts,.comparison-grid{{grid-template-columns:1fr}}}}</style></head><body>
     <h1>2025 Fantasy Ranking Analysis</h1><div class='subtitle'>Use the controls above each position to compare sources, metrics, and ranking scopes.</div>
     <div class='metrics'><div class='metric'><strong>{metrics['matched']}</strong>Matched players</div><div class='metric'><strong>{metrics['adp_matched']}</strong>ADP matches</div></div>
     <div class='source-charts'>{rank_charts_html}</div>{rank_sync_script}
+    <section><h2>Ranking accuracy by position</h2><p>Median absolute rank error is shown; lower is better. Top N uses actual positional rank.</p><div class='scoreboard-controls'><label>Metric <select class='scoreboard-metric-select'><option value='total'{' selected' if initial_metric == 'total' else ''}>Total points</option><option value='avg'{' selected' if initial_metric == 'avg' else ''}>Avg PPG</option></select></label><label>Player pool <select class='scoreboard-cutoff-select'><option value='all' selected>All</option><option value='12'>Top 12</option><option value='24'>Top 24</option><option value='36'>Top 36</option><option value='48'>Top 48</option></select></label></div>{scoreboard_html}</section>{scoreboard_sync_script}
     <h2>Market analysis: ADP</h2><div class='market-charts'>{adp_charts_html}</div>
     <h2>Market analysis: ECR</h2><div class='market-charts'>{ecr_charts_html}</div>
     <section><h2>Top-five comparisons</h2><p>Lower rank error is better. Margin is the difference in absolute rank error.</p><div class='comparison-controls'><label for='comparison-metric-select'>Metric</label><select id='comparison-metric-select' class='comparison-metric-select'><option value='total'{' selected' if initial_metric == 'total' else ''}>Total points</option><option value='avg'{' selected' if initial_metric == 'avg' else ''}>Avg PPG</option></select></div><div class='comparison-grid'>{comparison_html}</div></section>{comparison_sync_script}
